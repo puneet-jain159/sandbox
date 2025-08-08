@@ -1,7 +1,8 @@
-import React, { useMemo } from 'react';
+import React, { useMemo, useState } from 'react';
 import styled from 'styled-components';
 import { useChat } from '../context/ChatContext';
 import { Chat } from '../types';
+import deleteIcon from '../assets/images/delete_icon.svg';
 
 interface SidebarContainerProps {
   isOpen: boolean;
@@ -24,7 +25,36 @@ const SidebarHeader = styled.div`
   align-items: center;
   padding: 8px 0;
   margin-bottom: 8px;
+`;
 
+const HeaderActions = styled.div`
+  display: flex;
+  align-items: center;
+  gap: 8px;
+`;
+
+const DeleteAllButton = styled.button`
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 4px 8px;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  color: #5F7281;
+  transition: all 0.2s ease;
+  
+  &:hover {
+    background-color: rgba(229, 62, 62, 0.1);
+    color: #E53E3E;
+  }
+  
+  &:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
 `;
 
 const SidebarHeaderText = styled.div`
@@ -100,6 +130,41 @@ const ChatItem = styled.div<{ active: boolean }>`
   }
 `;
 
+const ChatItemContainer = styled.div`
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+`;
+
+const DeleteButton = styled.button`
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 4px;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+  transition: opacity 0.2s ease;
+  color: #5F7281;
+  
+  &:hover {
+    background-color: rgba(95, 114, 129, 0.1);
+    color: #E53E3E;
+  }
+  
+  ${ChatItem}:hover & {
+    opacity: 1;
+  }
+`;
+
+const DeleteIcon = styled.img`
+  width: 14px;
+  height: 14px;
+`;
+
 const ChatItemText = styled.span`
   position: relative;
   overflow: hidden;
@@ -116,7 +181,32 @@ const DateHeader = styled.div`
 `;
 
 const Sidebar: React.FC = () => {
-  const { chats, currentChat, selectChat, isSidebarOpen } = useChat();
+  const { chats, currentChat, selectChat, isSidebarOpen, deleteSession, deleteAllSessions } = useChat();
+  const [deletingSession, setDeletingSession] = useState<string | null>(null);
+  const [deletingAll, setDeletingAll] = useState(false);
+
+  const handleDeleteSession = async (sessionId: string, e: React.MouseEvent) => {
+    e.stopPropagation(); // Prevent chat selection
+    if (window.confirm('Are you sure you want to delete this session? This action cannot be undone.')) {
+      setDeletingSession(sessionId);
+      try {
+        await deleteSession(sessionId);
+      } finally {
+        setDeletingSession(null);
+      }
+    }
+  };
+
+  const handleDeleteAllSessions = async () => {
+    if (window.confirm('Are you sure you want to delete all sessions? This action cannot be undone.')) {
+      setDeletingAll(true);
+      try {
+        await deleteAllSessions();
+      } finally {
+        setDeletingAll(false);
+      }
+    }
+  };
 
   // Group chats by date categories and sessions
   const groupedChats = useMemo(() => {
@@ -172,6 +262,19 @@ const Sidebar: React.FC = () => {
           Recent chats
           <InfoIcon data-testid="info-tooltip">i</InfoIcon>
         </SidebarHeaderText>
+        {chats.length > 0 && (
+          <HeaderActions>
+            <DeleteAllButton
+              onClick={handleDeleteAllSessions}
+              disabled={deletingAll}
+              title="Delete all sessions"
+              data-testid="delete-all-sessions"
+            >
+              <DeleteIcon src={deleteIcon} alt="Delete all" />
+              Clear all
+            </DeleteAllButton>
+          </HeaderActions>
+        )}
       </SidebarHeader>
       
       <ChatList data-testid="chat-list">
@@ -189,7 +292,17 @@ const Sidebar: React.FC = () => {
                     onClick={() => selectChat(sessionChats[0].sessionId)}
                     data-testid={`chat-item-${sessionChats[0].sessionId}`}
                   >
-                    <ChatItemText>{sessionChats[0].firstQuery}</ChatItemText>
+                    <ChatItemContainer>
+                      <ChatItemText>{sessionChats[0].firstQuery}</ChatItemText>
+                      <DeleteButton
+                        onClick={(e) => handleDeleteSession(sessionId, e)}
+                        disabled={deletingSession === sessionId}
+                        title="Delete session"
+                        data-testid={`delete-session-${sessionId}`}
+                      >
+                        <DeleteIcon src={deleteIcon} alt="Delete" />
+                      </DeleteButton>
+                    </ChatItemContainer>
                   </ChatItem>
                 </SessionGroup>
               ))}

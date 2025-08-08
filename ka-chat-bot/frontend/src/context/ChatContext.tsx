@@ -1,6 +1,6 @@
 import React, { createContext, useContext, useState, useEffect, useRef, ReactNode } from 'react';
 import { Message, Chat } from '../types';
-import { sendMessage as apiSendMessage, getChatHistory, API_URL, logout as apiLogout } from '../api/chatApi';
+import { sendMessage as apiSendMessage, getChatHistory, API_URL, logout as apiLogout, deleteSession as apiDeleteSession, deleteAllSessions as apiDeleteAllSessions } from '../api/chatApi';
 import { v4 as uuid } from 'uuid';
 
 interface ChatContextType {
@@ -15,6 +15,8 @@ interface ChatContextType {
   startNewSession: () => void;
   copyMessage: (content: string) => void;
   logout: () => void;
+  deleteSession: (sessionId: string) => Promise<void>;
+  deleteAllSessions: () => Promise<void>;
   error: string | null;
   clearError: () => void;
   currentEndpoint: string;
@@ -232,6 +234,48 @@ export const ChatProvider = ({ children }: { children: ReactNode }) => {
     localStorage.setItem('selectedEndpoint', endpointName);
   };
 
+  const deleteSession = async (sessionId: string) => {
+    try {
+      await apiDeleteSession(sessionId);
+      
+      // Remove the deleted session from chats
+      setChats(prev => prev.filter(chat => chat.sessionId !== sessionId));
+      
+      // If the deleted session was the current chat, clear it
+      if (currentChat?.sessionId === sessionId) {
+        setCurrentChat(null);
+        setMessages([]);
+        setCurrentSessionId(null);
+      }
+      
+      // Refresh chat history
+      const chatHistory = await getChatHistory();
+      setChats(chatHistory.sessions || []);
+    } catch (error) {
+      console.error('Failed to delete session:', error);
+      setError('Failed to delete session. Please try again.');
+    }
+  };
+
+  const deleteAllSessions = async () => {
+    try {
+      await apiDeleteAllSessions();
+      
+      // Clear all chats and current chat
+      setChats([]);
+      setCurrentChat(null);
+      setMessages([]);
+      setCurrentSessionId(null);
+      
+      // Refresh chat history
+      const chatHistory = await getChatHistory();
+      setChats(chatHistory.sessions || []);
+    } catch (error) {
+      console.error('Failed to delete all sessions:', error);
+      setError('Failed to delete all sessions. Please try again.');
+    }
+  };
+
   return (
     <ChatContext.Provider value={{
       currentChat,
@@ -245,6 +289,8 @@ export const ChatProvider = ({ children }: { children: ReactNode }) => {
       startNewSession,
       copyMessage,
       logout,
+      deleteSession,
+      deleteAllSessions,
       error,
       clearError,
       currentEndpoint,

@@ -130,7 +130,7 @@ async def chat(
             supports_streaming = await check_endpoint_capabilities(serving_endpoint_name, streaming_support_cache)
             logger.info(f"ednpoint {serving_endpoint_name} supports_streaming: {supports_streaming}")
             request_data = {
-                "input": [
+                "messages": [
                     *([{"role": msg["role"], "content": msg["content"]} for msg in chat_history[:-1]] 
                         if message.include_history else []),
                     {"role": "user", "content": message.content}
@@ -249,6 +249,39 @@ async def login(
             status_code=401,
             detail=f"Authentication failed: {str(e)}"
         )
+
+@api_app.delete("/sessions/{session_id}")
+async def delete_session(
+    session_id: str,
+    user_info: dict = Depends(get_user_info),
+    chat_db: ChatDatabase = Depends(get_chat_db)
+):
+    """Delete a specific session and all its chat history"""
+    try:
+        user_id = user_info.get('user_id')
+        result = chat_db.delete_session_api(session_id, user_id)
+        return result
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"Error deleting session {session_id}: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to delete session: {str(e)}")
+
+@api_app.delete("/sessions")
+async def delete_user_sessions(
+    user_info: dict = Depends(get_user_info),
+    chat_db: ChatDatabase = Depends(get_chat_db)
+):
+    """Delete all sessions for the current user"""
+    try:
+        user_id = user_info.get('user_id')
+        result = chat_db.delete_user_sessions_api(user_id)
+        return result
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"Error deleting user sessions: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to delete user sessions: {str(e)}")
 
 
 if __name__ == "__main__":

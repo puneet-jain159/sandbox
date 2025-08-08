@@ -121,6 +121,48 @@ export const logout = async () => {
   window.location.href = `${API_URL}/logout`;
 };
 
+export const deleteSession = async (sessionId: string): Promise<void> => {
+  try {
+    const response = await fetch(`${API_URL}/sessions/${sessionId}`, {
+      method: 'DELETE',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+    });
+    
+    if (!response.ok) {
+      throw new Error(`HTTP error! status: ${response.status}`);
+    }
+    
+    const data = await response.json();
+    console.log('Session deleted successfully:', data.message);
+  } catch (error) {
+    console.error('Error deleting session:', error);
+    throw error;
+  }
+};
+
+export const deleteAllSessions = async (): Promise<void> => {
+  try {
+    const response = await fetch(`${API_URL}/sessions`, {
+      method: 'DELETE',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+    });
+    
+    if (!response.ok) {
+      throw new Error(`HTTP error! status: ${response.status}`);
+    }
+    
+    const data = await response.json();
+    console.log('All sessions deleted successfully:', data.message);
+  } catch (error) {
+    console.error('Error deleting all sessions:', error);
+    throw error;
+  }
+};
+
 export interface ServingEndpoint {
   name: string;
   state: string;
