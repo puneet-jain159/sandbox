@@ -127,8 +127,12 @@ async def chat(
             serving_endpoint_name = SERVING_ENDPOINT_NAME
             endpoint_url = f"https://{DATABRICKS_HOST}/serving-endpoints/{serving_endpoint_name}/invocations"
             
-            supports_streaming = await check_endpoint_capabilities(serving_endpoint_name, streaming_support_cache)
-            logger.info(f"ednpoint {serving_endpoint_name} supports_streaming: {supports_streaming}")
+            supports_streaming, supports_trace = await check_endpoint_capabilities(
+                serving_endpoint_name, streaming_support_cache
+            )
+            logger.info(
+                f"ednpoint {serving_endpoint_name} supports_streaming: {(supports_streaming, supports_trace)}"
+            )
             request_data = {
                 "messages": [
                     *([{"role": msg["role"], "content": msg["content"]} for msg in chat_history[:-1]] 
@@ -136,7 +140,9 @@ async def chat(
                     {"role": "user", "content": message.content}
                 ]
             }
-            request_data["databricks_options"] = {"return_trace": True}
+            request_data["databricks_options"] = {"return_trace": bool(supports_trace)}
+            # Use session_id as thread_id for agent/assistant endpoints
+            request_data["custom_inputs"] = {"thread_id": message.session_id}
 
             if not supports_streaming:
                 async for response_chunk in streaming_handler.handle_non_streaming_response(
@@ -163,10 +169,10 @@ async def chat(
                                 if response.status_code == 200:
                                     
                                     async for response_chunk in streaming_handler.handle_streaming_response(
-                                        response, request_data, headers, message.session_id, assistant_message_id,
+                                    response, request_data, headers, message.session_id, assistant_message_id,
                                         user_id, user_info, None, start_time, first_token_time,
                                         accumulated_content, None, ttft, request_handler, message_handler, 
-                                        streaming_support_cache, True, False
+                                        streaming_support_cache, supports_trace, False
                                     ):
                                         yield response_chunk
 
@@ -199,21 +205,39 @@ async def chat(
             }
         )
 
+    except httpx.HTTPStatusError as http_err:
+        friendly_msg = None
+        if http_err.response is not None and http_err.response.status_code == 429:
+            friendly_msg = "The service is currently experiencing high demand. Please wait a moment and try again."
+        error_message = message_handler.create_error_message(
+            session_id=message.session_id,
+            user_id=user_id,
+            error_content=friendly_msg or ("An error occurred while processing your request. " + str(http_err))
+        )
+
+        async def error_generate():
+            yield f"data: {error_message.model_dump_json()}\n\n"
+            yield "event: done\ndata: {}\n\n"
+
+        return StreamingResponse(
+            error_generate(),
+            media_type="text/event-stream",
+            headers={
+                'Cache-Control': 'no-cache',
+                'Connection': 'keep-alive',
+            }
+        )
     except Exception as e:
-        # Handle rate limit errors specifically
-        if isinstance(e, httpx.HTTPStatusError) and e.response.status_code == 429:
-            error_message = "The service is currently experiencing high demand. Please wait a moment and try again."
-        
         error_message = message_handler.create_error_message(
             session_id=message.session_id,
             user_id=user_id,
             error_content="An error occurred while processing your request. " + str(e)
         )
-        
+
         async def error_generate():
             yield f"data: {error_message.model_dump_json()}\n\n"
             yield "event: done\ndata: {}\n\n"
-            
+
         return StreamingResponse(
             error_generate(),
             media_type="text/event-stream",
@@ -239,16 +263,17 @@ async def login(
 ):
     """Login endpoint for PAT authentication"""
     try:
-       return user_info
+        return user_info
+    except httpx.HTTPStatusError as http_err:
+        logger.error("Login failed with HTTP error: %s", str(http_err))
+        resp = getattr(http_err, "response", None)
+        if resp is not None:
+            logger.error("Response status: %s", getattr(resp, "status_code", None))
+            logger.error("Response body: %s", getattr(resp, "text", None))
+        raise HTTPException(status_code=401, detail=f"Authentication failed: {str(http_err)}")
     except Exception as e:
-        logger.error(f"Login failed with error: {str(e)}")
-        if hasattr(e, 'response'):
-            logger.error(f"Response status: {e.response.status_code}")
-            logger.error(f"Response body: {e.response.text}")
-        raise HTTPException(
-            status_code=401,
-            detail=f"Authentication failed: {str(e)}"
-        )
+        logger.error("Login failed with error: %s", str(e))
+        raise HTTPException(status_code=401, detail=f"Authentication failed: {str(e)}")
 
 @api_app.delete("/sessions/{session_id}")
 async def delete_session(

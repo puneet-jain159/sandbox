@@ -56,7 +56,10 @@ def material_hierarchy_resolver_agent(state: AgentState, llm_model, logger, defa
             utils.call_get_material_hierarchy_level,
             f"Original request: '{prompt}'",
         )
-        messages = updated_messages
+        deduped_messages = []
+        for msg in updated_messages:
+            deduped_messages = add_message_if_not_exists(deduped_messages, msg)
+        messages = deduped_messages
     else:
         if user_confirmed_hierarchy == "skip":
             confirmed_hierarchy = None
@@ -133,7 +136,10 @@ def location_hierarchy_resolver_agent(state: AgentState, llm_model, logger, defa
             utils.call_get_location_hierarchy_level,
             combined_prompt,
         )
-        messages = updated_messages
+        deduped_messages = []
+        for msg in updated_messages:
+            deduped_messages = add_message_if_not_exists(deduped_messages, msg)
+        messages = deduped_messages
     else:
         confirmed_location_hierarchy = user_confirmed_location_hierarchy
         extracted_location = (
