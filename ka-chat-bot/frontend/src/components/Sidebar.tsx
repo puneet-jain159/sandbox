@@ -43,7 +43,7 @@ const DeleteAllButton = styled.button`
   align-items: center;
   gap: 4px;
   font-size: 12px;
-  color: #5F7281;
+  color:rgb(189, 17, 17);
   transition: all 0.2s ease;
   
   &:hover {

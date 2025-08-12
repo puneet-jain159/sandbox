@@ -1,6 +1,6 @@
 fastapi==0.104.1
 uvicorn==0.24.0
-pydantic==2.4.2
+pydantic>=2.5.0
 python-dotenv==1.0.0
 databricks-sdk==0.62.0
 aiofiles==23.2.1
@@ -9,3 +9,11 @@ gunicorn==23.0.0
 httpx==0.25.2
 sqlalchemy==2.0.42
 psycopg2-binary==2.9.9
+langchain>=0.3.27
+langchain-core
+langchain-community
+langgraph==0.6.4
+langchain-openai
+databricks-langchain
+unitycatalog-ai[databricks,langchain]
+mlflow[databricks]>=3.2.0
