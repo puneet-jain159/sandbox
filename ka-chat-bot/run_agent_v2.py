@@ -1,12 +1,11 @@
 import uuid
 from typing import Optional, Dict, Any
 
-from agent_build.mlflowlogger import LangGraphChatAgent
+from agent_build_v2.mlflowlogger import LangGraphChatAgent
 
 
 def create_input_example(
     query: str = "What is the total spend of tea in 2023?",
-    Give me top 10 suppliers by spend in 2023 in india?
     thread_id: Optional[str] = None,
     state: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
@@ -37,12 +36,53 @@ def _coerce_messages_to_dict(messages: list[dict] | list[Any]) -> list[dict]:
     coerced: list[dict] = []
     for m in messages:
         if isinstance(m, dict):
-            if "role" in m and "content" in m:
-                coerced.append({"role": m["role"], "content": m["content"]})
+            # Filter out tool messages to avoid compatibility issues
+            if m.get("role") == "tool":
+                # Convert tool messages to assistant messages with the content
+                content = m.get("content", "")
+                if content:
+                    # Try to extract meaningful content from tool messages
+                    try:
+                        import json
+                        tool_data = json.loads(content)
+                        if isinstance(tool_data, dict) and "message" in tool_data:
+                            # Use the message field from tool response
+                            content = tool_data["message"]
+                        else:
+                            # Use the entire content as a string
+                            content = str(tool_data)
+                    except (json.JSONDecodeError, TypeError):
+                        # If not JSON, use as-is
+                        pass
+                    
+                    coerced.append({
+                        "role": "assistant",
+                        "content": content,
+                        "id": str(uuid.uuid4())
+                    })
+            else:
+                # Preserve all fields from non-tool messages
+                coerced.append(m)
         else:
+            # For non-dict messages, extract what we can
             role = getattr(m, "role", "assistant")
             content = getattr(m, "content", "")
-            coerced.append({"role": role, "content": content})
+            
+            # Skip tool messages
+            if role == "tool":
+                continue
+                
+            message_dict = {"role": role, "content": content}
+            
+            # Add other fields if they exist
+            if hasattr(m, "id"):
+                message_dict["id"] = m.id
+            if hasattr(m, "name"):
+                message_dict["name"] = m.name
+            if hasattr(m, "tool_call_id"):
+                message_dict["tool_call_id"] = m.tool_call_id
+            
+            coerced.append(message_dict)
     return coerced
 
 
@@ -68,7 +108,7 @@ def main() -> None:
     example = create_input_example(query="What is the total spend of tea in 2023?", thread_id=thread_id)
 
     # Call predict using the example
-    response = agent.predict(
+    response = agent.predict_stream(
         messages=example["messages"],
         custom_inputs=example["custom_inputs"],
     )

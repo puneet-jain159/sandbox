@@ -2,7 +2,7 @@ from __future__ import annotations
 
 """Agent implementations for the procurement workflow."""
 from typing import Any, Dict, Optional, TypedDict, Annotated
-from agent_build.utils import add_message_if_not_exists
+from agent_build.utils import add_message_if_not_exists, deduplicate_messages
 
 from langchain_core.messages import AnyMessage
 from langchain.schema import HumanMessage
@@ -18,7 +18,7 @@ class AgentState(TypedDict):
     user_confirmed_location_hierarchy: Optional[str]
     combined_prompt: Optional[str]
     final_response: Optional[str]
-    messages: Annotated[list[AnyMessage], add_messages]
+    messages: list[AnyMessage]
     worker_outputs: Optional[Dict[str, str]]
     next_node: Optional[str]
 
@@ -56,10 +56,7 @@ def material_hierarchy_resolver_agent(state: AgentState, llm_model, logger, defa
             utils.call_get_material_hierarchy_level,
             f"Original request: '{prompt}'",
         )
-        deduped_messages = []
-        for msg in updated_messages:
-            deduped_messages = add_message_if_not_exists(deduped_messages, msg)
-        messages = deduped_messages
+        messages = deduplicate_messages(updated_messages)
     else:
         if user_confirmed_hierarchy == "skip":
             confirmed_hierarchy = None
@@ -136,10 +133,10 @@ def location_hierarchy_resolver_agent(state: AgentState, llm_model, logger, defa
             utils.call_get_location_hierarchy_level,
             combined_prompt,
         )
-        deduped_messages = []
-        for msg in updated_messages:
-            deduped_messages = add_message_if_not_exists(deduped_messages, msg)
-        messages = deduped_messages
+
+        # Ensure no duplicates get added to AgentState messages
+        messages = deduplicate_messages(updated_messages)
+
     else:
         confirmed_location_hierarchy = user_confirmed_location_hierarchy
         extracted_location = (
@@ -211,10 +208,27 @@ def summary_agent(state: AgentState, llm_model, default_config, logger) -> Dict[
     messages = state.get("messages", [])
     summary_prompt = default_config.summary_prompt.build_prompt(messages)
     summary_response = llm_model.invoke(summary_prompt).content
-    messages = add_message_if_not_exists(messages, {"role": "assistant", "content": f"Summary: '{summary_response}'."})
-    state.setdefault("worker_outputs", {})
-    state["worker_outputs"]["summary_agent"] = {"summary_response": summary_response}
-    return {"summary_response": summary_response, "messages": messages, "next": END}
+
+    # Prepare a single summary message for the user output
+    summary_message = {"role": "assistant", "content": f"Summary: '{summary_response}'."}
+
+    # Reset state so follow-on conversations in the same thread can start fresh
+    return {
+
+        "messages": [messages[0],summary_message],
+        # Reset workflow-specific fields
+        "original_prompt": "",
+        "user_confirmed_hierarchy": None,
+        "extracted_material": None,
+        "extracted_location": None,
+        "user_confirmed_location_hierarchy": None,
+        "combined_prompt": None,
+        "worker_outputs": {},
+        # Signal graph to end
+        "next": END,
+        # Hint downstream (loader) to treat next call as a fresh conversation
+        "ready_for_new_conversation": True,
+    }
 
 
 def supervisor_agent(state: AgentState, llm_model, logger, default_config) -> Dict[str, Any]:

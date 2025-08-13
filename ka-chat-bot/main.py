@@ -1,7 +1,7 @@
 from fastapi import FastAPI, HTTPException, Depends, BackgroundTasks, Response, Request, Query, Header
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import StreamingResponse, RedirectResponse
+from fastapi.responses import StreamingResponse, RedirectResponse, FileResponse
 from typing import Dict, List, Optional
 from databricks.sdk import WorkspaceClient
 from databricks.sdk.service.serving import EndpointStateReady
@@ -63,9 +63,82 @@ class CachedStaticFiles(StaticFiles):
         response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
         return response
 
-ui_app = CachedStaticFiles(directory="frontend/build-chat-app", html=True)
+class SPAStaticFiles(StaticFiles):
+    """Custom StaticFiles that serves index.html for SPA routes"""
+    async def get_response(self, path: str, scope):
+        # Log the requested path for debugging
+        logger.info(f"SPA Handler - Requested path: '{path}'")
+        
+        # Static files should NOT come here - they should go to /static mount
+        if path.startswith("static/"):
+            logger.error(f"Static file request reached SPA handler: {path}")
+            logger.error("This indicates a mount configuration issue")
+            # Try to serve it anyway from the static directory
+            try:
+                static_path = path[7:]  # Remove 'static/' prefix
+                response = await super().get_response(f"static/{static_path}", scope)
+                response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+                logger.info(f"Successfully served static file from SPA handler: {path}")
+                return response
+            except Exception as static_error:
+                logger.error(f"Failed to serve static file from SPA handler: {static_error}")
+                raise static_error
+        
+        # For root path, serve index.html
+        if path == "" or path == "/" or path == ".":
+            path = "index.html"
+            logger.info(f"Root path requested, serving: {path}")
+        
+        try:
+            response = await super().get_response(path, scope)
+            logger.info(f"Successfully served: {path}")
+            return response
+        except Exception as e:
+            logger.warning(f"Failed to serve path '{path}': {e}")
+            # If file not found and it's not an API route, serve index.html for SPA routing
+            if "not found" in str(e).lower() and not path.startswith("chat-api"):
+                try:
+                    logger.info(f"Serving index.html as fallback for: {path}")
+                    response = await super().get_response("index.html", scope)
+                    return response
+                except Exception as fallback_error:
+                    logger.error(f"Failed to serve index.html fallback: {fallback_error}")
+                    raise e
+            raise e
+
+# Create API app first
 api_app = FastAPI()
+
+# Check if frontend build directory exists
+frontend_dir = "frontend/build-chat-app"
+static_dir = os.path.join(frontend_dir, "static")
+
+if not os.path.exists(frontend_dir):
+    logger.warning(f"Frontend build directory not found at {frontend_dir}")
+    logger.info(f"Current working directory: {os.getcwd()}")
+    logger.info(f"Directory contents: {os.listdir('.')}")
+    if os.path.exists("frontend"):
+        logger.info(f"Frontend directory contents: {os.listdir('frontend')}")
+else:
+    logger.info(f"Frontend build directory found at {frontend_dir}")
+    if os.path.exists(static_dir):
+        logger.info(f"Static directory found at {static_dir}")
+        logger.info(f"Static directory contents: {os.listdir(static_dir)}")
+
+# Mount in order of specificity (most specific first)
+# 1. API routes
 app.mount("/chat-api", api_app)
+
+# 2. Static assets (must be before root mount)
+if os.path.exists(static_dir):
+    static_files = StaticFiles(directory=static_dir)
+    app.mount("/static", static_files)
+    logger.info("Mounted /static directory for static assets")
+else:
+    logger.error(f"Static directory not found: {static_dir}")
+
+# 3. SPA for the main UI (catch-all, must be last)
+ui_app = SPAStaticFiles(directory=frontend_dir, html=True)
 app.mount("/", ui_app)
 app.add_middleware(
     CORSMiddleware,
@@ -88,6 +161,61 @@ async def get_auth_headers(
 @api_app.get("/")
 async def root():
     return {"message": "Databricks Chat API is running"}
+
+@api_app.get("/debug")
+async def debug_info():
+    """Debug endpoint to check file system"""
+    frontend_dir = "frontend/build-chat-app"
+    static_dir = os.path.join(frontend_dir, "static")
+    
+    debug_info = {
+        "cwd": os.getcwd(),
+        "frontend_dir": frontend_dir,
+        "frontend_exists": os.path.exists(frontend_dir),
+        "static_dir": static_dir,
+        "static_exists": os.path.exists(static_dir),
+        "app_mounts": [str(mount) for mount in app.routes if hasattr(mount, 'path')]
+    }
+    
+    if os.path.exists(frontend_dir):
+        debug_info["frontend_files"] = os.listdir(frontend_dir)
+        
+        if os.path.exists(static_dir):
+            debug_info["static_files"] = os.listdir(static_dir)
+            
+            # Check specific asset directories
+            for subdir in ["css", "js", "media"]:
+                subdir_path = os.path.join(static_dir, subdir)
+                if os.path.exists(subdir_path):
+                    debug_info[f"static_{subdir}_files"] = os.listdir(subdir_path)
+                    
+            # Check if specific CSS file exists
+            css_file = os.path.join(static_dir, "css", "main.f260d893.css")
+            debug_info["css_file_exists"] = os.path.exists(css_file)
+            if os.path.exists(css_file):
+                debug_info["css_file_size"] = os.path.getsize(css_file)
+    
+    return debug_info
+
+@api_app.get("/test-static")
+async def test_static():
+    """Test if we can access static files directly"""
+    import httpx
+    
+    try:
+        # Test accessing the static file through the mount
+        base_url = "http://localhost:8000"  # Adjust if needed
+        response = await httpx.AsyncClient().get(f"{base_url}/static/css/main.f260d893.css")
+        return {
+            "status": "success",
+            "css_response_status": response.status_code,
+            "css_content_length": len(response.content) if response.content else 0
+        }
+    except Exception as e:
+        return {
+            "status": "error",
+            "error": str(e)
+        }
 
 # API Routes
 @api_app.get("/config")

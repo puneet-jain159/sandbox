@@ -61,6 +61,7 @@ class RequestHandler:
     async def make_databricks_request(self, url: str, headers: dict, data: dict):
         try:
             logger.info(f"Making Databricks request to {url}")
+            logger.debug(f"Request headers: {headers}")
             
             # Create a new client for each attempt to ensure fresh connection
             async with httpx.AsyncClient(timeout=30.0) as new_client:
@@ -74,6 +75,16 @@ class RequestHandler:
                         logger.info(f"Rate limited. Waiting {wait_time} seconds before retry.")
                         await asyncio.sleep(wait_time)
                     raise httpx.HTTPStatusError("Rate limit exceeded", request=response.request, response=response)
+                
+                # Log error responses for debugging
+                if response.status_code >= 400:
+                    logger.error(f"HTTP {response.status_code} error from {url}")
+                    logger.error(f"Response headers: {dict(response.headers)}")
+                    try:
+                        logger.error(f"Response body: {response.text}")
+                    except Exception:
+                        logger.error("Could not read response body")
+                
                 return response
                 
         except Exception as e:
@@ -201,10 +212,16 @@ class RequestHandler:
                     'trace_id': trace_id
                 }
         else:
-            # Handle specific known cases
-            error_data = response.json()
+            # Handle error responses safely
+            try:
+                error_data = response.json()
+                error_message = error_data.get('error_code', 'Encountered an error') + ". " + error_data.get('message', 'Error processing response.')
+            except (json.JSONDecodeError, ValueError):
+                # Handle cases where response body is empty or not valid JSON
+                error_message = f"HTTP {response.status_code}: {response.reason_phrase or 'Error processing response'}"
+            
             response_data = {
-                'content': error_data.get('error_code', 'Encountered an error') + ". " + error_data.get('message', 'Error processing response.'),
+                'content': error_message,
                 'sources': [],
                 'metrics': None,
                 'trace_id': None  # No trace_id available for error responses

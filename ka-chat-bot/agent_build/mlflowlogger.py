@@ -5,6 +5,7 @@ import os
 import mlflow
 from mlflow.pyfunc import ChatAgent  # type: ignore
 from mlflow.types.agent import ChatAgentMessage, ChatAgentResponse, ChatContext  # type: ignore
+from agent_build.utils import add_message_if_not_exists
 
 
 
@@ -109,14 +110,6 @@ class LangGraphChatAgent(ChatAgent):
         elif hasattr(app_or_workflow, "compile"):
             # Compile with checkpointer strictly; require Postgres when available
             from agent_build.compile import get_pg_checkpointer  # lazy import to avoid cycles
-            host=os.getenv("DATABRICKS_HOST")
-            client_id=os.getenv("CLIENT_ID")
-            client_secret=os.getenv("CLIENT_SECRET")
-
-            print("host:", host)
-            print("client_id:", client_id)
-            print("client_secret:", client_secret)
-
             with get_pg_checkpointer() as checkpointer:  # type: ignore[misc]
                 self.app = app_or_workflow.compile(checkpointer=checkpointer)
         else:
@@ -173,6 +166,22 @@ class LangGraphChatAgent(ChatAgent):
         else:
             to_send = state_values
 
+        # # If the workflow signaled readiness for a new conversation, reset state
+        # if isinstance(to_send, dict) and to_send.get("ready_for_new_conversation"):
+        #     user_content = request["messages"][-1]["content"] if request["messages"] else ""
+        #     to_send = {
+        #         "original_prompt": user_content,
+        #         "user_confirmed_hierarchy": None,
+        #         "extracted_material": None,
+        #         "extracted_location": None,
+        #         "user_confirmed_location_hierarchy": None,
+        #         "combined_prompt": None,
+        #         "final_response": None,
+        #         "messages": [request["messages"][-1]] if request["messages"] else [],
+        #         "worker_outputs": {},
+        #         "next_node": None,
+        #     }
+
         # Optional inline user confirmations
         if check_if_heirarchy_resolver_exists(request):
             trigger_text = find_trigger_message(request, "Please confirm the material hierarchy level")
@@ -187,7 +196,7 @@ class LangGraphChatAgent(ChatAgent):
                 except Exception:  # noqa: BLE001
                     pass
 
-        if check_if_location_heirarchy_resolver_exists(request):
+        elif check_if_location_heirarchy_resolver_exists(request):
             trigger_text = find_trigger_message(request, "Please confirm the location hierarchy level")
             updated_state = {
                 "extracted_location": extract_location(trigger_text) if trigger_text else None,
@@ -199,6 +208,30 @@ class LangGraphChatAgent(ChatAgent):
                     to_send = self.app.get_state(thread_config).values  # type: ignore[attr-defined]
                 except Exception:  # noqa: BLE001
                     pass
+        else:
+            # Neither resolver flow is active; append the latest user message to original_prompt
+            last_content = request["messages"][-1]["content"] if request.get("messages") else ""
+            if last_content:
+                original_prompt = (to_send.get("original_prompt") or "") if isinstance(to_send, dict) else ""
+                if last_content not in original_prompt:
+                    to_send["original_prompt"] = f"{original_prompt}\n{last_content}" if original_prompt else last_content
+                # Also append the latest user message to the messages list with de-duplication
+                if isinstance(to_send, dict):
+                    base_messages = to_send.get("messages", [])
+                    last_msg_dict = request["messages"][-1] if request.get("messages") else None
+                    if last_msg_dict:
+                        to_send["messages"] = add_message_if_not_exists(base_messages, last_msg_dict)
+                # Persist these updates into the workflow state so the checkpointer captures them
+                if hasattr(self.app, "update_state"):
+                    try:
+                        self.app.update_state(
+                            thread_config,
+                            {"original_prompt": to_send.get("original_prompt", ""), "messages": to_send.get("messages", [])},
+                            "supervisor_agent",
+                        )  # type: ignore[attr-defined]
+                        to_send = self.app.get_state(thread_config).values  # type: ignore[attr-defined]
+                    except Exception:  # noqa: BLE001
+                        pass
 
         # Stream execution and capture final update; also capture interrupt messages (if any)
         last_chunk: Dict[str, Any] = {}
