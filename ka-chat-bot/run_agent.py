@@ -6,7 +6,6 @@ from agent_build.mlflowlogger import LangGraphChatAgent
 
 def create_input_example(
     query: str = "What is the total spend of tea in 2023?",
-    Give me top 10 suppliers by spend in 2023 in india?
     thread_id: Optional[str] = None,
     state: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
