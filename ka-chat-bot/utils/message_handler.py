@@ -14,7 +14,7 @@ class MessageHandler:
 
     def create_message(self, message_id: str, content: str, role: str, session_id: str, user_id: str, 
                       user_info: Optional[dict] = None, sources: Optional[list] = None, 
-                      metrics: Optional[dict] = None, is_first_message: bool = False) -> MessageResponse:
+                      metrics: Optional[dict] = None, is_first_message: bool = False, trace_id: Optional[str] = None) -> MessageResponse:
         """Create a new message and save it to both database and cache"""
         
         message = MessageResponse(
@@ -25,7 +25,8 @@ class MessageHandler:
             timestamp=datetime.now().isoformat(),
             sources=sources,
             metrics=metrics,
-            created_at=datetime.now().isoformat()
+            created_at=datetime.now().isoformat(),
+            trace_id=trace_id
         )
         # Save to database
         self.chat_db.save_message_to_session(session_id, 

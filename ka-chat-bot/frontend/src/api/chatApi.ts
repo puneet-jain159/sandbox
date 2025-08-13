@@ -1,6 +1,8 @@
 import { Chat } from '../types';
+import { config } from '../config';
 
-export const API_URL = '/chat-api';
+// API Configuration
+const API_URL = config.API_BASE_URL;
 
 
 export const sendMessage = async (
@@ -16,7 +18,8 @@ export const sendMessage = async (
       timeToFirstToken?: number;
       totalTime?: number;
     },
-    model?: string
+    model?: string,
+    trace_id?: string  // Add trace_id to chunk type
   }) => void,
 ): Promise<void> => {
   try {
@@ -37,13 +40,11 @@ export const sendMessage = async (
       }
     );
     if (!response.ok) {
-      console.log("response.ok", response.ok);
       throw new Error(`HTTP error! status: ${response.status}`);
     }
 
     const reader = response.body?.getReader();
     if (!reader) {
-      console.log("No reader available");
       throw new Error('No reader available');
     }
 
@@ -73,7 +74,8 @@ export const sendMessage = async (
                 message_id: parsedData.message_id,
                 content: accumulatedContent,
                 sources: parsedData.sources,
-                metrics: parsedData.metrics
+                metrics: parsedData.metrics,
+                trace_id: parsedData.trace_id // Add trace_id to onChunk callback
               });
             } catch (e) {
               console.error('Error parsing JSON:', e);
@@ -134,8 +136,6 @@ export const deleteSession = async (sessionId: string): Promise<void> => {
       throw new Error(`HTTP error! status: ${response.status}`);
     }
     
-    const data = await response.json();
-    console.log('Session deleted successfully:', data.message);
   } catch (error) {
     console.error('Error deleting session:', error);
     throw error;
@@ -155,8 +155,6 @@ export const deleteAllSessions = async (): Promise<void> => {
       throw new Error(`HTTP error! status: ${response.status}`);
     }
     
-    const data = await response.json();
-    console.log('All sessions deleted successfully:', data.message);
   } catch (error) {
     console.error('Error deleting all sessions:', error);
     throw error;
@@ -167,3 +165,87 @@ export interface ServingEndpoint {
   name: string;
   state: string;
 }
+
+export const rateMessage = async (
+  messageId: string,
+  sessionId: string,
+  rating: 'up' | 'down'
+): Promise<void> => {
+  try {
+    const response = await fetch(`${API_URL}/rate-message`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        message_id: messageId,
+        session_id: sessionId,
+        rating: rating
+      })
+    });
+    
+    if (!response.ok) {
+      throw new Error(`HTTP error! status: ${response.status}`);
+    }
+    
+  } catch (error) {
+    console.error('Error rating message:', error);
+    throw error;
+  }
+};
+
+export const removeRating = async (
+  messageId: string,
+  sessionId: string
+): Promise<void> => {
+  try {
+    const response = await fetch(`${API_URL}/rate-message`, {
+      method: 'DELETE',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        message_id: messageId,
+        session_id: sessionId
+      })
+    });
+    
+    if (!response.ok) {
+      throw new Error(`HTTP error! status: ${response.status}`);
+    }
+    
+  } catch (error) {
+    console.error('Error removing rating:', error);
+    throw error;
+  }
+};
+
+export interface FeedbackData {
+  message_id: string;
+  session_id: string;
+  rating: 'up' | 'down';
+  comment?: string;
+  trace_id?: string;
+}
+
+export const submitFeedback = async (feedback: FeedbackData): Promise<{ success: boolean; message: string }> => {
+  try {
+    const response = await fetch(`${API_URL}/feedback`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(feedback)
+    });
+    
+    if (!response.ok) {
+      throw new Error(`HTTP error! status: ${response.status}`);
+    }
+    
+    const data = await response.json();
+    return data;
+  } catch (error) {
+    console.error('Error submitting feedback:', error);
+    throw error;
+  }
+};

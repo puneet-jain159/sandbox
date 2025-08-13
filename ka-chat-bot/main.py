@@ -14,11 +14,14 @@ import httpx
 import time  
 import logging
 import asyncio
+import mlflow
+import mlflow.entities
+
 from chat_database import ChatDatabase
 from collections import defaultdict
 from contextlib import asynccontextmanager
-from models import MessageRequest, MessageResponse, ChatHistoryItem, ChatHistoryResponse, CreateChatRequest, RegenerateRequest
-from utils.config import SERVING_ENDPOINT_NAME, DATABRICKS_HOST
+from models import MessageRequest, MessageResponse, ChatHistoryItem, ChatHistoryResponse, CreateChatRequest, RegenerateRequest, FeedbackRequest, FeedbackResponse
+from utils.config import SERVING_ENDPOINT_NAME, DATABRICKS_HOST, MLFLOW_EXPERIMENT_ID
 from utils import *
 from utils.logging_handler import with_logging
 from utils.app_state import app_state
@@ -85,6 +88,16 @@ async def get_auth_headers(
 @api_app.get("/")
 async def root():
     return {"message": "Databricks Chat API is running"}
+
+# API Routes
+@api_app.get("/config")
+async def get_config():
+    """Get frontend configuration values"""
+    return {
+        "databricks_host": DATABRICKS_HOST,
+        "mlflow_experiment_id": MLFLOW_EXPERIMENT_ID,
+        "serving_endpoint_name": SERVING_ENDPOINT_NAME
+    }
 
 # Modify the chat endpoint to handle sessions
 @api_app.post("/chat")
@@ -250,7 +263,9 @@ async def chat(
 @api_app.get("/chats", response_model=ChatHistoryResponse)
 async def get_chat_history(user_info: dict = Depends(get_user_info),chat_db: ChatDatabase = Depends(get_chat_db)):
     user_id = user_info["user_id"]
-    return chat_db.get_chat_history(user_id)
+    logger.info(f"Getting chat history for user_id: {user_id}")
+    chat_history = chat_db.get_chat_history(user_id)
+    return chat_history
 
 # Add logout endpoint
 @api_app.get("/logout")
@@ -307,6 +322,116 @@ async def delete_user_sessions(
     except Exception as e:
         logger.error(f"Error deleting user sessions: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Failed to delete user sessions: {str(e)}")
+
+@api_app.post("/rate-message")
+async def rate_message(
+    request: dict,
+    user_info: dict = Depends(get_user_info),
+    chat_db: ChatDatabase = Depends(get_chat_db)
+):
+    """Rate a message with thumbs up or down"""
+    try:
+        message_id = request.get('message_id')
+        session_id = request.get('session_id')
+        rating = request.get('rating')
+        user_id = user_info.get('user_id')
+        
+        if not all([message_id, session_id, rating, user_id]):
+            raise HTTPException(status_code=400, detail="Missing required fields")
+        
+        if rating not in ['up', 'down']:
+            raise HTTPException(status_code=400, detail="Rating must be 'up' or 'down'")
+        
+        success = chat_db.update_message_rating(message_id, user_id, rating)
+        if success:
+            return {"message": "Message rated successfully"}
+        else:
+            raise HTTPException(status_code=500, detail="Failed to rate message")
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error rating message: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to rate message: {str(e)}")
+
+@api_app.delete("/rate-message")
+async def delete_rating(
+    request: dict,
+    user_info: dict = Depends(get_user_info),
+    chat_db: ChatDatabase = Depends(get_chat_db)
+):
+    """Remove a message rating"""
+    try:
+        message_id = request.get('message_id')
+        session_id = request.get('session_id')
+        user_id = user_info.get('user_id')
+        
+        if not all([message_id, session_id, user_id]):
+            raise HTTPException(status_code=400, detail="Missing required fields")
+        
+        success = chat_db.update_message_rating(message_id, user_id, None)
+        if success:
+            return {"message": "Rating removed successfully"}
+        else:
+            raise HTTPException(status_code=500, detail="Failed to remove rating")
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error removing rating: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to remove rating: {str(e)}")
+
+@api_app.post("/feedback", response_model=FeedbackResponse)
+async def submit_feedback(
+    feedback: FeedbackRequest,
+    user_info: dict = Depends(get_user_info),
+    chat_db: ChatDatabase = Depends(get_chat_db)
+):
+    """
+    Submit user feedback linked to trace
+    """
+    try:
+        logger.info(f"Received feedback request: message_id={feedback.message_id}, rating={feedback.rating}")
+        
+        # Try to log to MLflow if we have a valid trace_id, but don't fail if it doesn't work
+        if feedback.trace_id:
+            try:
+                # Log feedback using mlflow.log_feedback (MLflow 3 API)
+                mlflow.log_feedback(
+                    trace_id=feedback.trace_id,
+                    name="user_feedback",
+                    value=True if feedback.rating == "up" else False,
+                    rationale=feedback.comment if feedback.comment else None,
+                    source=mlflow.entities.AssessmentSource(
+                        source_type="HUMAN",
+                        source_id=user_info.get('displayName') or user_info.get('email') or "user",
+                    ),
+                )
+                logger.info(f"Feedback logged to MLflow for trace_id: {feedback.trace_id}")
+            except Exception as mlflow_error:
+                logger.warning(f"Failed to log feedback to MLflow (this is expected if no trace exists): {str(mlflow_error)}")
+                # Continue with database update even if MLflow fails
+        else:
+            logger.info("No trace_id provided, skipping MLflow logging")
+
+        # Always update the message rating in our database
+        user_id = user_info.get('user_id')
+        if user_id:
+            success = chat_db.update_message_rating(feedback.message_id, user_id, feedback.rating)
+            if success:
+                logger.info(f"Feedback rating updated in database for message: {feedback.message_id}")
+            else:
+                logger.warning(f"Failed to update rating in database for message: {feedback.message_id}")
+        else:
+            logger.warning("No user_id found in user_info")
+
+        return FeedbackResponse(success=True, message="Feedback submitted successfully")
+
+    except Exception as e:
+        logger.error(f"Error submitting feedback: {str(e)}")
+        return FeedbackResponse(
+            success=False, message=f"Error submitting feedback: {str(e)}"
+        )
 
 
 if __name__ == "__main__":

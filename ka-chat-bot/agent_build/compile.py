@@ -77,7 +77,6 @@ def get_pg_checkpointer():
 
 
     uri = build_db_uri(username, instance_name, use_sp=True)
-    print("uri:", uri)
 
     # Append keepalive parameters to URI to reduce idle disconnects
     keepalive_params = "keepalives=1&keepalives_idle=30&keepalives_interval=10&keepalives_count=5"

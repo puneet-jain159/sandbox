@@ -1,16 +1,20 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import styled from 'styled-components';
 import ReactMarkdown from 'react-markdown';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faCheck, faChevronDown } from '@fortawesome/free-solid-svg-icons';
 import copyIconUrl from '../assets/images/copy_icon.svg';
-import refreshIconUrl from '../assets/images/sync_icon.svg';
 import buttonIconUrl from '../assets/images/buttonIcon.svg';
 import downIconUrl from '../assets/images/down_icon.svg';
+import thumbsUpIconUrl from '../assets/images/thumbs_up_icon.svg';
+import thumbsDownIconUrl from '../assets/images/thumbs_down_icon.svg';
 import { Message } from '../types';
 import { useChat } from '../context/ChatContext';
 import sourceIconUrl from '../assets/images/source_icon.svg';
 import remarkGfm from 'remark-gfm';
+import { submitFeedback } from '../api/chatApi';
+import FeedbackPopup from './FeedbackPopup';
+import { buildTraceUrl, fetchBackendConfig, BackendConfig } from '../config';
 
 const MessageContainer = styled.div<{ isUser: boolean }>`
   display: flex;
@@ -128,8 +132,8 @@ const CheckIconWrapper = styled.div<{ $copied: boolean }>`
   `}
 `;
 
-const RefreshButton = styled(ActionButton)`
-  background-image: url(${refreshIconUrl});
+const ThumbsUpButton = styled(ActionButton)<{ isActive: boolean }>`
+  background-image: url(${thumbsUpIconUrl});
   background-size: 16px;
   background-repeat: no-repeat;
   background-position: center;
@@ -137,6 +141,25 @@ const RefreshButton = styled(ActionButton)`
     background-color: rgba(34, 114, 180, 0.08);
     color: #0E538B;
   }
+  ${props => props.isActive && `
+    background-color: rgba(34, 114, 180, 0.08);
+    color: #0E538B;
+  `}
+`;
+
+const ThumbsDownButton = styled(ActionButton)<{ isActive: boolean }>`
+  background-image: url(${thumbsDownIconUrl});
+  background-size: 16px;
+  background-repeat: no-repeat;
+  background-position: center;
+  &:hover {
+    background-color: rgba(34, 114, 180, 0.08);
+    color: #0E538B;
+  }
+  ${props => props.isActive && `
+    background-color: rgba(34, 114, 180, 0.08);
+    color: #0E538B;
+  `}
 `;
 
 const SourcesSection = styled.div`
@@ -399,24 +422,93 @@ const StyledLink = styled.a`
   }
 `;
 
+const TraceLink = styled.a`
+  background-color: #E0E0E0;
+  color: #11171C;
+  padding: 4px 8px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: 10px;
+  text-decoration: none;
+  &:hover {
+    background-color: #D0D0D0;
+    color: #0E538B;
+  }
+`;
+
 interface ChatMessageProps {
   message: Message;
   'data-testid'?: string;
 }
 
 const ChatMessage: React.FC<ChatMessageProps> = ({ message }) => {
-  const { copyMessage } = useChat();
+  const { copyMessage, currentSessionId } = useChat();
   const isUser = message.role === 'user';
   const [showSources, setShowSources] = useState(false);
   const [selectedSource, setSelectedSource] = useState<number | null>(null);
   const [copied, setCopied] = useState(false);
   const [closedThinks, setClosedThinks] = useState<string[]>([]);
+  const [rating, setRating] = useState<'up' | 'down' | null>(message.rating || null);
+  const [feedbackPopup, setFeedbackPopup] = useState(false);
+  const [backendConfig, setBackendConfig] = useState<BackendConfig | null>(null);
   const chatContentRef = useRef<HTMLDivElement>(null);
+
+  // Fetch backend configuration on component mount
+  useEffect(() => {
+    const loadConfig = async () => {
+      const config = await fetchBackendConfig();
+      if (config) {
+        setBackendConfig(config);
+      }
+    };
+    loadConfig();
+  }, []);
 
   const handleCopy = async () => {
     await copyMessage(message.content);
     setCopied(true);
     setTimeout(() => setCopied(false), 5000); // Reset after 5 seconds
+  };
+
+  const submitFeedbackAndClose = async (feedback: { rating: 'up' | 'down'; comment?: string }) => {
+    try {
+      // If we don't have a trace_id, try to fetch the latest message data from the backend
+      let traceId = message.trace_id;
+      if (!traceId) {
+        try {
+          const response = await fetch(`/chat-api/chats`);
+          if (response.ok) {
+            const data = await response.json();
+            const messageData = data.sessions?.flatMap((s: any) => s.messages)?.find((m: any) => m.message_id === message.message_id);
+            if (messageData?.trace_id) {
+              traceId = messageData.trace_id;
+            }
+          }
+        } catch (e) {
+          // Silently handle fetch errors
+        }
+      }
+      
+      const result = await submitFeedback({
+        message_id: message.message_id,
+        session_id: currentSessionId || '',
+        rating: feedback.rating,
+        comment: feedback.comment,
+        trace_id: traceId
+      });
+      
+      // Update local rating state
+      setRating(feedback.rating);
+      
+      return result;
+    } catch (error) {
+      console.error('Error submitting feedback:', error);
+      return { success: false, message: 'Failed to submit feedback' };
+    }
   };
 
   const toggleThink = (thinkId: string) => {
@@ -603,6 +695,16 @@ const ChatMessage: React.FC<ChatMessageProps> = ({ message }) => {
         <ModelName data-testid="model-name">
           {'Knowledge Assistant'}
         </ModelName>
+        {message.trace_id && (
+          <TraceLink 
+            href={buildTraceUrl(message.trace_id, backendConfig || undefined)}
+            target="_blank"
+            rel="noopener noreferrer"
+            title="View trace in MLflow"
+          >
+            🔍 Trace
+          </TraceLink>
+        )}
       </ModelInfo>
       
       <BotMessageContent data-testid="bot-message-content">
@@ -626,9 +728,32 @@ const ChatMessage: React.FC<ChatMessageProps> = ({ message }) => {
                 <FontAwesomeIcon icon={faCheck} />
               </CheckIconWrapper>
             </CopyButton>
+            {!isUser && (
+              <>
+                <ThumbsUpButton
+                  onClick={() => setFeedbackPopup(true)}
+                  title="Provide feedback"
+                  isActive={rating === 'up'}
+                  data-testid={`thumbs-up-${message.message_id}`}
+                />
+                <ThumbsDownButton
+                  onClick={() => setFeedbackPopup(true)}
+                  title="Provide feedback"
+                  isActive={rating === 'down'}
+                  data-testid={`thumbs-down-${message.message_id}`}
+                />
+              </>
+            )}
           </MessageActions>
         </MessageFooter>
       </BotMessageContent>
+      <FeedbackPopup
+        isOpen={feedbackPopup}
+        onClose={() => setFeedbackPopup(false)}
+        messageId={message.message_id}
+        sessionId={currentSessionId || ''}
+        onSubmit={submitFeedbackAndClose}
+      />
     </MessageContainer>
   );
 };

@@ -42,6 +42,7 @@ class MessageModel(Base):
     timestamp = Column(String, nullable=False)
     sources = Column(Text)
     metrics = Column(Text)
+    trace_id = Column(String)
     created_at = Column(DateTime, default=datetime.utcnow)
 
 class MessageRatingModel(Base):
@@ -296,7 +297,8 @@ class ChatDatabase:
         with self.db_lock:
             try:
                 Base.metadata.create_all(bind=self.engine)
-                logger.info("Database tables created successfully")
+                logger.info("Database tables created successfully")                
+                
             except Exception as e:
                 logger.error(f"Error initializing database: {str(e)}")
                 raise
@@ -336,8 +338,10 @@ class ChatDatabase:
                     model=message.model,
                     timestamp=message.timestamp.isoformat(),
                     sources=json.dumps(message.sources) if message.sources else None,
-                    metrics=json.dumps(message.metrics) if message.metrics else None
+                    metrics=json.dumps(message.metrics) if message.metrics else None,
+                    trace_id=message.trace_id
                 )
+                
                 db.add(message_model)
                 db.commit()
                 
@@ -407,7 +411,13 @@ class ChatDatabase:
                 # Convert to ChatHistoryItem format
                 chat_messages = []
                 for msg in messages:
-                    chat_messages.append(MessageResponse(
+                    # Get the rating for this message
+                    rating = db.query(MessageRatingModel).filter(
+                        MessageRatingModel.message_id == msg.message_id,
+                        MessageRatingModel.user_id == msg.user_id
+                    ).first()
+                    
+                    chat_message = MessageResponse(
                         message_id=msg.message_id,
                         content=msg.content,
                         role=msg.role,
@@ -415,8 +425,12 @@ class ChatDatabase:
                         timestamp=datetime.fromisoformat(msg.timestamp),
                         created_at=msg.created_at,
                         sources=json.loads(msg.sources) if msg.sources else None,
-                        metrics=json.loads(msg.metrics) if msg.metrics else None
-                    ))
+                        metrics=json.loads(msg.metrics) if msg.metrics else None,
+                        rating=rating.rating if rating else None,
+                        trace_id=msg.trace_id
+                    )
+                    
+                    chat_messages.append(chat_message)
                 
                 chat_history.append(ChatHistoryItem(
                     sessionId=session.session_id,
@@ -460,8 +474,13 @@ class ChatDatabase:
             
             chat_messages = []
             for msg in messages:
-                logger.info(f"Found message: message_id={msg.message_id}, user_id={msg.user_id}")
-                chat_messages.append(MessageResponse(
+                # Get the rating for this message
+                rating = db.query(MessageRatingModel).filter(
+                    MessageRatingModel.message_id == msg.message_id,
+                    MessageRatingModel.user_id == msg.user_id
+                ).first()
+                
+                chat_message = MessageResponse(
                     message_id=msg.message_id,
                     content=msg.content,
                     role=msg.role,
@@ -469,8 +488,12 @@ class ChatDatabase:
                     timestamp=datetime.fromisoformat(msg.timestamp),
                     created_at=msg.created_at,
                     sources=json.loads(msg.sources) if msg.sources else None,
-                    metrics=json.loads(msg.metrics) if msg.metrics else None
-                ))
+                    metrics=json.loads(msg.metrics) if msg.metrics else None,
+                    rating=rating.rating if rating else None,
+                    trace_id=msg.trace_id
+                )
+                
+                chat_messages.append(chat_message)
             
             return ChatHistoryItem(
                 sessionId=session_id,

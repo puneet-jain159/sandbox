@@ -13,6 +13,9 @@ export interface Message {
   model?: string;
   sources?: any[] | null;
   metrics?: MessageMetrics | null;
+  rating?: 'up' | 'down' | null;
+  session_id?: string;
+  trace_id?: string;
 }
 
 export interface Chat {

@@ -36,6 +36,9 @@ class StreamingHandler:
         update_flag: bool
     ) -> AsyncGenerator[str, None]:
         """Handle streaming response from the model."""
+        # Initialize variables
+        trace_id = None
+        
         try:
             async for line in response.aiter_lines():
                 if line.startswith('data: '):
@@ -53,7 +56,7 @@ class StreamingHandler:
                             accumulated_content += content
                             # Extract sources if this is the final message containing databricks_options
                             if 'databricks_output' in data:
-                                sources = await request_handler.extract_sources_from_trace(data)
+                                sources, trace_id = await request_handler.extract_sources_from_trace(data)
                             # Include the same message_id in each chunk
                             response_data = create_response_data(
                                 message_id,
@@ -61,7 +64,8 @@ class StreamingHandler:
                                 sources,
                                 ttft if first_token_time is not None else None,
                                 time.time() - start_time,
-                                original_timestamp
+                                original_timestamp,
+                                trace_id
                             )
                             
                             yield f"data: {json.dumps(response_data)}\n\n"
@@ -107,7 +111,8 @@ class StreamingHandler:
                                     user_id=user_id,
                                     user_info=user_info,
                                     sources=sources,
-                                    metrics={'timeToFirstToken': ttft, 'totalTime': time.time() - start_time}
+                                    metrics={'timeToFirstToken': ttft, 'totalTime': time.time() - start_time},
+                                    trace_id=trace_id
                                 )
                 streaming_support_cache['endpoints'][SERVING_ENDPOINT_NAME] = {
                     'supports_streaming': True,
@@ -118,6 +123,7 @@ class StreamingHandler:
             final_response = {
                 'message_id': message_id,
                 'sources': sources,
+                'trace_id': trace_id  # Include trace_id in streaming response
             }
             yield f"data: {json.dumps(final_response)}\n\n"
             yield "event: done\ndata: {}\n\n"
@@ -150,7 +156,8 @@ class StreamingHandler:
                 user_id=user_id,
                 user_info=user_info,
                 sources=response_data.get("sources"),
-                metrics=response_data.get("metrics")
+                metrics=response_data.get("metrics"),
+                trace_id=response_data.get("trace_id")
             )
             
             yield f"data: {assistant_message.model_dump_json()}\n\n"

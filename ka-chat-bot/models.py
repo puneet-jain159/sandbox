@@ -1,6 +1,23 @@
 from pydantic import BaseModel, Field
 from typing import List, Optional, Dict
 from datetime import datetime
+from enum import Enum
+
+class FeedbackRating(str, Enum):
+    THUMBS_UP = "up"
+    THUMBS_DOWN = "down"
+
+class FeedbackRequest(BaseModel):
+    message_id: str
+    session_id: str
+    rating: FeedbackRating
+    comment: Optional[str] = None
+    trace_id: Optional[str] = None
+    sales_rep_name: Optional[str] = None
+
+class FeedbackResponse(BaseModel):
+    success: bool
+    message: str
 
 class MessageRequest(BaseModel):
     content: str
@@ -18,6 +35,8 @@ class MessageResponse(BaseModel):
     sources: Optional[List[Dict]] = None
     metrics: Optional[Dict] = None
     isThinking: Optional[bool] = None
+    rating: Optional[str] = None
+    trace_id: Optional[str] = None
 
 class ChatHistoryItem(BaseModel):
     sessionId: str  

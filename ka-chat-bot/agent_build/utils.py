@@ -202,7 +202,7 @@ def handle_hierarchy_ambiguity(extracted_item: str, hierarchy_level: str,
     logger = get_logger()
     logger.info(f"⚠️  Ambiguous {item_type} hierarchy: {hierarchy_level}")
     
-    messages.append({
+    messages = add_message_if_not_exists(messages, {
         "role": "assistant",
         "content": f"'{extracted_item}' appears in multiple {item_type} hierarchies. Please confirm the {item_type} hierarchy level."
     })
@@ -242,7 +242,7 @@ def process_extraction_results(extracted_item: str, extracted_hierarchy: str,
         # Both extracted, use as-is
         confirmed_hierarchy = extracted_hierarchy
         combined_prompt = f"{combined_prompt}\nHierarchy level for {extracted_item}: '{confirmed_hierarchy}'"
-        messages.append({
+        messages = add_message_if_not_exists(messages, {
             "role": "assistant",
             "content": f"Extracted {item_type}: '{extracted_item}' and hierarchy: '{extracted_hierarchy}'."
         })
@@ -260,7 +260,7 @@ def process_extraction_results(extracted_item: str, extracted_hierarchy: str,
         else:
             confirmed_hierarchy = hierarchy_level
             combined_prompt = f"{combined_prompt}\nHierarchy level for {extracted_item}: '{confirmed_hierarchy}'"
-            messages.append({
+            messages = add_message_if_not_exists(messages, {
                 "role": "assistant",
                 "content": f"Resolved hierarchy from lookup: '{confirmed_hierarchy}'."
             })
@@ -271,7 +271,7 @@ def process_extraction_results(extracted_item: str, extracted_hierarchy: str,
     else:
         # Nothing extracted
         logger.info(f"❌ No {item_type} or hierarchy found")
-        messages.append({
+        messages = add_message_if_not_exists(messages, {
             "role": "assistant",
             "content": f"No {item_type} or hierarchy found."
         })

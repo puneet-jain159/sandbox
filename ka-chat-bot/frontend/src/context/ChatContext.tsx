@@ -1,6 +1,7 @@
-import React, { createContext, useContext, useState, useEffect, useRef, ReactNode } from 'react';
+import React, { createContext, useContext, useState, useEffect, useRef } from 'react';
+import { sendMessage as apiSendMessage, getChatHistory, logout as apiLogout, deleteSession as apiDeleteSession, deleteAllSessions as apiDeleteAllSessions } from '../api/chatApi';
+import { config } from '../config';
 import { Message, Chat } from '../types';
-import { sendMessage as apiSendMessage, getChatHistory, API_URL, logout as apiLogout, deleteSession as apiDeleteSession, deleteAllSessions as apiDeleteAllSessions } from '../api/chatApi';
 import { v4 as uuid } from 'uuid';
 
 interface ChatContextType {
@@ -21,11 +22,12 @@ interface ChatContextType {
   clearError: () => void;
   currentEndpoint: string;
   setCurrentEndpoint: (endpointName: string) => void;
+  currentSessionId: string | null;
 }
 
 const ChatContext = createContext<ChatContextType | undefined>(undefined);
 
-export const ChatProvider = ({ children }: { children: ReactNode }) => {
+export const ChatProvider = ({ children }: { children: React.ReactNode }) => {
   const [currentChat, setCurrentChat] = useState<Chat | null>(null);
   const [currentEndpoint, setCurrentEndpoint] = useState<string>(() => {
     // Initialize from localStorage if available
@@ -97,6 +99,7 @@ export const ChatProvider = ({ children }: { children: ReactNode }) => {
       let messageSources: any[] | null = null;
       let messageMetrics: { timeToFirstToken?: number; totalTime?: number } | null = null;
       let messageId = '';
+      let messageTraceId: string | null = null;  // Add trace_id capture
       
       if (!currentSessionId) {
         throw new Error('No active session ID');
@@ -115,6 +118,9 @@ export const ChatProvider = ({ children }: { children: ReactNode }) => {
         if (chunk.message_id) {
           messageId = chunk.message_id;
         }
+        if (chunk.trace_id) {  // Capture trace_id from chunk
+          messageTraceId = chunk.trace_id;
+        }
     
         setMessages(prev => prev.map(msg => 
           msg.message_id === thinkingMessage.message_id 
@@ -123,6 +129,7 @@ export const ChatProvider = ({ children }: { children: ReactNode }) => {
                 content: chunk.content || '',
                 sources: chunk.sources,
                 metrics: chunk.metrics,
+                trace_id: chunk.trace_id || msg.trace_id,  // Update trace_id in real-time
                 isThinking: false,
                 model: currentEndpoint
               }
@@ -138,7 +145,8 @@ export const ChatProvider = ({ children }: { children: ReactNode }) => {
         isThinking: false,
         model: currentEndpoint,
         sources: messageSources,
-        metrics: messageMetrics
+        metrics: messageMetrics,
+        trace_id: messageTraceId || undefined  // Convert null to undefined
       };
 
       setMessages(prev => prev.filter(msg => 
@@ -168,7 +176,7 @@ export const ChatProvider = ({ children }: { children: ReactNode }) => {
       ));
     } finally {
       try {
-        const historyResponse = await fetch(`${API_URL}/chats`);
+        const historyResponse = await fetch(`${config.API_BASE_URL}/chats`);
         const historyData = await historyResponse.json();
         if (historyData.sessions) {
           setChats(historyData.sessions);
@@ -210,7 +218,6 @@ export const ChatProvider = ({ children }: { children: ReactNode }) => {
   const copyMessage = (content: string) => {
     navigator.clipboard.writeText(content)
       .then(() => {
-        console.log('Message copied to clipboard');
       })
       .catch(err => {
         console.error('Failed to copy message:', err);
@@ -294,7 +301,8 @@ export const ChatProvider = ({ children }: { children: ReactNode }) => {
       error,
       clearError,
       currentEndpoint,
-      setCurrentEndpoint: handleSetCurrentEndpoint
+      setCurrentEndpoint: handleSetCurrentEndpoint,
+      currentSessionId
     }}>
       {children}
     </ChatContext.Provider>

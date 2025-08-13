@@ -81,13 +81,41 @@ class RequestHandler:
             raise  # Re-raise the exception to trigger backoff
 
     # TODO: this is wrong, do we need this??
-    async def extract_sources_from_trace(self, data: dict) -> list:
-        """Extract sources from the Databricks API trace data format."""
+    async def extract_sources_from_trace(self, data: dict) -> tuple[list, Optional[str]]:
+        """Extract sources and trace_id from the Databricks API trace data format."""
         sources = []
+        trace_id = None
         try:
+            # Try multiple possible locations for trace data
+            trace = None
+            
+            # Method 1: Check databricks_output.trace (most common)
             if data and "databricks_output" in data and "trace" in data["databricks_output"]:
                 trace = data["databricks_output"]["trace"]
-                if trace and "data" in trace and "spans" in trace["data"]:
+            
+            # Method 2: Check direct trace field
+            elif data and "trace" in data:
+                trace = data["trace"]
+            
+            # Method 3: Check for trace in other possible locations
+            elif data and "metadata" in data and "trace" in data["metadata"]:
+                trace = data["metadata"]["trace"]
+            
+            # Method 4: Check for trace_id in response headers or other fields
+            elif data and "trace_id" in data:
+                trace_id = data["trace_id"]
+            
+            if trace:
+                # Extract trace_id from multiple possible paths
+                if "info" in trace and "trace_id" in trace["info"]:
+                    trace_id = trace["info"]["trace_id"]
+                elif "id" in trace:
+                    trace_id = trace["id"]
+                elif "trace_id" in trace:
+                    trace_id = trace["trace_id"]
+                
+                # Extract sources from spans if available
+                if "data" in trace and "spans" in trace["data"]:
                     for span in trace["data"]["spans"]:
                         if span.get("name") == "RETRIEVER":
                             outputs = span.get("attributes", {}).get("mlflow.spanOutputs")
@@ -101,9 +129,11 @@ class RequestHandler:
                                         })
                                 except Exception as e:
                                     logger.error(f"Failed to parse spanOutputs: {e}")
+                
         except Exception as e:
             logger.error(f"Error extracting sources from trace: {e}")
-        return sources
+        
+        return sources, trace_id
 
     async def handle_databricks_response(
         self,
@@ -118,14 +148,15 @@ class RequestHandler:
 
         if response.status_code == 200:
             data = response.json()
-            sources = await self.extract_sources_from_trace(data)
+            sources, trace_id = await self.extract_sources_from_trace(data)
             
             if 'choices' in data and len(data['choices']) > 0:
                 content = data['choices'][0]['message']['content']
                 response_data = {
                     'content': content,
                     'sources': sources,
-                    'metrics': {'totalTime': total_time}
+                    'metrics': {'totalTime': total_time},
+                    'trace_id': trace_id
                 }
             elif 'messages' in data and len(data['messages']) > 0:
                 messages = data['messages']
@@ -136,7 +167,8 @@ class RequestHandler:
                 response_data = {
                     'content': '\n\n'.join(content),
                     'sources': sources,
-                    'metrics': {'totalTime': total_time}
+                    'metrics': {'totalTime': total_time},
+                    'trace_id': trace_id
                 }
             elif 'output' in data and len(data['output']) > 0:
                 # New Responses API format
@@ -151,19 +183,22 @@ class RequestHandler:
                     response_data = {
                         'content': content,
                         'sources': sources,
-                        'metrics': {'totalTime': total_time}
+                        'metrics': {'totalTime': total_time},
+                        'trace_id': trace_id
                     }
                 else:
                     response_data = {
                         'content': 'No content found in response',
                         'sources': sources,
-                        'metrics': {'totalTime': total_time}
+                        'metrics': {'totalTime': total_time},
+                        'trace_id': trace_id
                     }
             else:
                 response_data = {
                     'content': 'No content found in response',
                     'sources': sources,
-                    'metrics': {'totalTime': total_time}
+                    'metrics': {'totalTime': total_time},
+                    'trace_id': trace_id
                 }
         else:
             # Handle specific known cases
@@ -171,7 +206,8 @@ class RequestHandler:
             response_data = {
                 'content': error_data.get('error_code', 'Encountered an error') + ". " + error_data.get('message', 'Error processing response.'),
                 'sources': [],
-                'metrics': None
+                'metrics': None,
+                'trace_id': None  # No trace_id available for error responses
             }
         return response_data
     

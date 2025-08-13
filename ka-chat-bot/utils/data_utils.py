@@ -36,6 +36,8 @@ async def check_endpoint_capabilities(
     # Cache expired or doesn't exist - fetch fresh data
     try:
         endpoint = client.serving_endpoints.get(model)
+        
+        # Check if endpoint supports feedback (which enables trace data)
         supports_trace = any(
             entity.name == 'feedback'
             for entity in endpoint.config.served_entities
@@ -43,15 +45,15 @@ async def check_endpoint_capabilities(
         
         # Update cache with fresh data
         streaming_support_cache['endpoints'][model] = {
-            'supports_streaming': True,
-            'supports_trace': supports_trace,
+            'supports_streaming': False,
+            'supports_trace': supports_trace,  # Use the actual detected value
             'last_checked': current_time
         }
-        return True, supports_trace
+        return False, supports_trace
         
     except Exception as e:
         # If error occurs, return default values
-        return True, False
+        return False, True
 
 
     
@@ -123,7 +125,8 @@ def create_response_data(
     sources: Optional[List],
     ttft: Optional[float],
     total_time: float,
-    timestamp: Optional[str] = None
+    timestamp: Optional[str] = None,
+    trace_id: Optional[str] = None
 ) -> Dict:
     """Create standardized response data for both streaming and non-streaming responses."""
     # Convert content to string if it's a dictionary
@@ -141,6 +144,10 @@ def create_response_data(
             'totalTime': total_time
         }
     }
+    
+    # Add trace_id if provided
+    if trace_id:
+        response_data['trace_id'] = trace_id
     
     # Add timestamp if provided
     if timestamp:
